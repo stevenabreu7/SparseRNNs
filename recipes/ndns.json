@@ -1,0 +1,19 @@
+{
+    "dataset": "ndns",
+    "n_layers": 3,
+    "d_model": 192,
+    "ssm_size_base": 256,
+    "blocks": 16,
+    "C_init": "lecun_normal",
+    "glu_variant": "half1",
+    "clip_eigs": true,
+    "bidirectional": false,
+    "prenorm": true,
+    "batchnorm": true,
+    "bsz": 32,
+    "epochs": 50,
+    "lr_factor": 4,
+    "p_dropout": 0.1,
+    "weight_decay": 0.04,
+    "opt_config": "noBCdecay"
+}

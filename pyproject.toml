@@ -1,0 +1,66 @@
+[project]
+name = "SparseRNNs"
+version = "0.1.0"
+description = "Train sparse and quantized modern recurrent neural networks in JAX."
+readme = "README.md"
+requires-python = ">=3.10"
+maintainers = [
+    {name = "Alessandro Pierro", email = "alessandro.pierro@intel.com"},
+]
+authors = [
+    {name = "Alessandro Pierro", email = "alessandro.pierro@intel.com"},
+    {name = "Steven Abreu", email = "steven.abreu@intel.com"},
+    {name = "Jonathan Timcheck", email = "jonathan.timcheck@intel.com"},
+]
+dependencies = [
+    "torch==2.7.0",
+    "torchvision==0.22.0",
+    "torchaudio==2.7.0",
+    "torchtext==0.18.0",
+    "torchdata==0.10.0",
+    "numpy==1.26.4",
+    "ffmpeg>=1.4",
+    "soundfile>=0.13.1",
+    "tqdm>=4.67.1",
+    "jaxpruner",
+    "jax[cuda12]>=0.5.0",
+    "opt-einsum>=3.4.0",
+    "optax>=0.2.4",
+    "einops==0.8.0",
+    "aqtp",
+    "setuptools>=75.8.0",
+    "datasets>=3.3.2",
+    "jaxtyping>=0.2.38",
+    "natsort>=8.4.0",
+    "wandb>=0.19.7",
+    "safetensors>=0.5.3",
+    "tabulate>=0.9.0",
+    "black>=25.1.0",
+    "matplotlib>=3.10.1",
+    "scikit-learn>=1.6.1",
+]
+
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu" },
+]
+torchvision = [
+    { index = "pytorch-cpu" },
+]
+torchaudio = [
+    { index = "pytorch-cpu" },
+]
+torchtext = [
+    { index = "pytorch-cpu" },
+]
+torchdata = [
+    { index = "pytorch-cpu" },
+]
+jaxpruner = { git = "https://github.com/google-research/jaxpruner", rev = "f133ee50f31a03d0152b8b272edb534065152f5d" }
+aqtp = { git = "https://github.com/stevenabreu7/aqt.git", rev = "9d4604a54125c17ee9d066a13de0a7ffd6eb8568" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

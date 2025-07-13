@@ -289,9 +289,6 @@ class FxpModule:
     def last_intermediates(self):
         return {k: v[-1] if len(v) > 0 else None for k, v in self.intermediates.items()}
 
-    def export(self) -> PyTree:
-        pass
-
 
 @dataclass
 class FxpDense(FxpModule):
@@ -369,33 +366,6 @@ class FxpDense(FxpModule):
             )
         self.sow("intermediates", "__call__", wx)
         return wx
-
-    def export(self) -> PyTree:
-        assert self.weight.exp == self.weight_exp
-        assert self.weight.bits == self.weight_bits
-        assert self.weight.signed == self.weight_signed
-        assert self.bias.exp == self.bias_exp
-        assert self.bias.bits == self.bias_bits
-        assert self.bias.signed == self.bias_signed
-        return dict(
-            params=dict(
-                weight=self.weight.data,
-                bias=self.bias.data,
-            ),
-            qconfig=dict(
-                weight_exp=self.weight_exp,
-                weight_bits=self.weight_bits,
-                weight_signed=self.weight_signed,
-                bias_exp=self.bias_exp,
-                bias_bits=self.bias_bits,
-                bias_signed=self.bias_signed,
-                inp_bits=self.inp_bits,
-                inp_exp=self.inp_exp,
-                out_bits=self.out_bits,
-                out_exp=self.out_exp,
-            ),
-            intermediates=self.last_intermediates(),
-        )
 
 
 @dataclass
@@ -825,36 +795,6 @@ class FxpSSM(FxpModule):
             associative_scan=associative_scan,
         )
 
-    def export(self):
-        params = {}
-        qconfig = {}
-        d = dict(
-            A_real=self.Lambda_bar.real,
-            A_imag=self.Lambda_bar.imag,
-            B_real=self.B_bar.real,
-            B_imag=self.B_bar.imag,
-            C_real=self.C_tilde.real,
-            C_imag=self.C_tilde.imag,
-            D=self.D,
-            B_bias_real=None if self.B_bias is None else self.B_bias.real,
-            B_bias_imag=None if self.B_bias is None else self.B_bias.imag,
-            D_bias=self.D_bias,
-        )
-        for k, x in d.items():
-            if x is not None:
-                params[k] = x.data
-                qconfig[f"{k}_bits"] = x.bits
-                qconfig[f"{k}_exp"] = x.exp
-                qconfig[f"{k}_signed"] = x.signed
-        for k in ["u", "Bu_re", "Bu_im", "x_re", "x_im", "y"]:
-            qconfig[f"{k}_bits"] = self.fxp_qconfig["activations"][k]["bits"]
-            qconfig[f"{k}_exp"] = self.fxp_qconfig["activations"][k]["exp"]
-        return dict(
-            params=params,
-            qconfig=qconfig,
-            intermediates=self.last_intermediates(),
-        )
-
 
 @dataclass
 class FxpBatchNorm(FxpModule):
@@ -951,30 +891,6 @@ class FxpBatchNorm(FxpModule):
             f"{self.scope} result: bits={x.bits}, exp={x.exp}," f" signed={x.signed}"
         )
         return x
-
-    def export(self):
-        data = dict(
-            params=dict(
-                mean=-1 * self.minus_mean.data,
-                invsq_var=self.invsq_var.data,
-            ),
-            qconfig=dict(
-                mean_bits=self.minus_mean.bits,
-                mean_exp=self.minus_mean.exp,
-                invsq_var_bits=self.invsq_var.bits,
-                invsq_var_exp=self.invsq_var.exp,
-            ),
-            intermediates=self.last_intermediates(),
-        )
-        if self.bias is not None:
-            data["params"]["bias"] = self.bias.data
-            data["qconfig"]["bias_bits"] = self.bias.bits
-            data["qconfig"]["bias_exp"] = self.bias.exp
-        if self.scale is not None:
-            data["params"]["scale"] = self.scale.data
-            data["qconfig"]["scale_bits"] = self.scale.bits
-            data["qconfig"]["scale_exp"] = self.scale.exp
-        return data
 
 
 @dataclass
@@ -1169,52 +1085,6 @@ class FxpSequenceLayer(FxpModule):
         self.sow("intermediates", "output", x)
         return x
 
-    def export(self):
-        norm_data = self.norm.export() if hasattr(self, "norm") else None
-        mixer_data = self.mixer.export()
-        out1_data = self.out1.export() if hasattr(self, "out1") else None
-        out2_data = self.out2.export()
-        multgate_qconfig = dict(
-            l_bits=self.fxp_qconfig["multgate"]["l_bits"],
-            l_exp=self.fxp_qconfig["multgate"]["l_exp"],
-            r_bits=self.fxp_qconfig["multgate"]["r_bits"],
-            r_exp=self.fxp_qconfig["multgate"]["r_exp"],
-            res_bits=self.fxp_qconfig["multgate"]["res_bits"],
-            res_exp=self.fxp_qconfig["multgate"]["res_exp"],
-        )
-        sigmoid_qconfig = dict(
-            x_exp=self.sigmoid_cls.x_exp,
-            y_exp=self.sigmoid_cls.y_exp,
-            x_extra=self.sigmoid_cls.x_extra,
-            n_exp=self.sigmoid_cls.n_exp,
-        )
-        data = dict(
-            params=dict(
-                mixer=mixer_data["params"],
-                out2=out2_data["params"],
-            ),
-            qconfig=dict(
-                mixer=mixer_data["qconfig"],
-                out2=out2_data["qconfig"],
-                multgate=multgate_qconfig,
-                sigmoid=sigmoid_qconfig,
-            ),
-            intermediates=dict(
-                mixer=mixer_data["intermediates"],
-                out2=out2_data["intermediates"],
-                **self.last_intermediates(),
-            ),
-        )
-        if out1_data is not None:
-            data["params"]["out1"] = out1_data["params"]
-            data["qconfig"]["out1"] = out1_data["qconfig"]
-            data["intermediates"]["out1"] = out1_data["intermediates"]
-        if norm_data is not None:
-            data["params"]["norm"] = norm_data["params"]
-            data["qconfig"]["norm"] = norm_data["qconfig"]
-            data["intermediates"]["norm"] = norm_data["intermediates"]
-        return data
-
 
 @dataclass
 class FxpStackedEncoderModel(FxpModule):
@@ -1279,112 +1149,6 @@ class FxpStackedEncoderModel(FxpModule):
             self.sow("intermediates", f"layer_{idx}_output", x)
         return x
 
-    def export(self):
-        encoder_data = self.encoder.export()
-        layers_data = [layer.export() for layer in self.seq_layers]
-        data = {
-            key: {
-                f"layers_{idx}": layers_data[idx][key] for idx in range(self.n_layers)
-            }
-            for key in ["params", "intermediates", "qconfig"]
-        }
-        data["params"]["encoder"] = encoder_data["params"]
-        data["intermediates"]["encoder"] = encoder_data["intermediates"]
-        data["qconfig"]["encoder"] = encoder_data["qconfig"]
-        data["intermediates"] = {
-            **data["intermediates"],
-            **self.last_intermediates(),
-        }
-        return data
-
-
-@dataclass
-class FxpClassificationModel(FxpModule):
-    mixer_cls: FxpModule  # ssm init function
-    n_layers: int
-    d_model: int
-    batchnorm: bool = True
-    prenorm: bool = False
-    bn_momentum: float = 0.9
-    glu_variant: str = "none"
-    step_rescale: float = 1.0
-    relufication: bool = False
-    fuse_batchnorm_linear: bool = False
-    q_config: QuantizationConfig = QuantizationConfig.none()
-    dropout: float = 0.2  # n/a in inference-only
-    training: bool = True  # n/a in inference-only
-    # args for classification model
-    d_output: int = None
-    padded: bool = False
-    mode: str = "pool"
-
-    def setup(self):
-        assert self.batchnorm, "Only batchnorm is supported for now."
-        assert self.dropout == 0.0, "Only dropout=0.0 is supported for now."
-        assert not self.training, "Only training=False is supported for now."
-        assert self.relufication, "Only relufication=True is supported for now."
-
-        self.encoder = FxpStackedEncoderModel(
-            modeldict=self.modeldict["encoder"],
-            fxp_qconfig=self.fxp_qconfig,
-            scope=self.scope + ".encoder",
-            store_intermediates=self.store_intermediates,
-            mixer_cls=self.mixer_cls,
-            n_layers=self.n_layers,
-            d_model=self.d_model,
-            dropout=self.dropout,
-            batchnorm=self.batchnorm,
-            prenorm=self.prenorm,
-            bn_momentum=self.bn_momentum,
-            glu_variant=self.glu_variant,
-            training=self.training,
-            step_rescale=self.step_rescale,
-            relufication=self.relufication,
-            fuse_batchnorm_linear=self.fuse_batchnorm_linear,
-            q_config=self.q_config,
-        )
-        self.decoder = FxpDense(
-            modeldict=self.modeldict["decoder"],
-            fxp_qconfig=self.fxp_qconfig["decoder"],
-            scope=self.scope + ".decoder",
-            store_intermediates=self.store_intermediates,
-        )
-
-    def forward(self, x: FxpArray, integration_timesteps: int) -> FxpArray:
-        if self.padded:
-            x, length = x
-
-        x = self.encoder(x, integration_timesteps)
-        if self.mode in ["pool"]:
-            x = masked_meanpool(x, length) if self.padded else fxp_mean(x, axis=0)
-        elif self.mode in ["last"] and not self.padded:
-            x = x[-1]
-        elif self.mode in ["last"] and self.padded:
-            raise NotImplementedError("Mode must be in ['pool'] for self.padded=True")
-        else:
-            raise NotImplementedError("Mode must be in ['pool', 'last]")
-
-        x = self.decoder(x)
-        return fxp_log_softmax(x, axis=-1)  # TODO: implement in fxp
-
-    def export(self):
-        encoder_data = self.encoder.export()
-        decoder_data = self.decoder.export()
-        return dict(
-            params=dict(
-                encoder=encoder_data["params"],
-                decoder=decoder_data["params"],
-            ),
-            qconfig=dict(
-                encoder=encoder_data["qconfig"],
-                decoder=decoder_data["qconfig"],
-            ),
-            intermediates=dict(
-                encoder=encoder_data["intermediates"],
-                decoder=decoder_data["intermediates"],
-            ),
-        )
-
 
 @dataclass
 class FxpRegressionModel(FxpModule):
@@ -1446,22 +1210,3 @@ class FxpRegressionModel(FxpModule):
         x = self.decoder(x)
         self.sow("intermediates", "output", x)
         return x
-
-    def export(self):
-        encoder_data = self.encoder.export()
-        decoder_data = self.decoder.export()
-        return dict(
-            params=dict(
-                encoder=encoder_data["params"],
-                decoder=decoder_data["params"],
-            ),
-            qconfig=dict(
-                encoder=encoder_data["qconfig"],
-                decoder=decoder_data["qconfig"],
-            ),
-            intermediates=dict(
-                encoder=encoder_data["intermediates"],
-                decoder=decoder_data["intermediates"],
-                **self.last_intermediates(),
-            ),
-        )

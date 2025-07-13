@@ -2,22 +2,22 @@ import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from functools import partial
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
-import jax
-# import jax.numpy as np
 import numpy as np
-from jaxtyping import Array, DTypeLike, PyTree
 
 from sparseRNNs.fxparray_np import (ComplexFxpArray, FxpArray, RoundingMode,
                                  fxp_add, fxp_complex_add, fxp_complex_mul,
                                  fxp_from_fp, fxp_log_softmax, fxp_matmul,
                                  fxp_mean, fxp_mul, fxp_sub)
-from sparseRNNs.model.seq_model import masked_meanpool
-from sparseRNNs.model.ssm import discretize_bilinear, discretize_zoh
-from sparseRNNs.utils.logging import logger
-from sparseRNNs.utils.quantization import QuantizationConfig
+from sparseRNNs.model.seq_model_np import masked_meanpool
+from sparseRNNs.model.ssm_np import discretize_bilinear, discretize_zoh
+from sparseRNNs.utils.logging_np import logger
+from sparseRNNs.utils.quantization_np import QuantizationConfig
 
+Array = Any
+DTypeLike = Any
+PyTree = Any
 Dtype = DTypeLike
 
 sys.path.append("$HOME/ncl-dl-stack")
@@ -210,8 +210,191 @@ def recurrent_loop(
     print(type(xt_scan))
     print(type(Lambda_elements))
     print(type(Bu_elements_scan))
-    breakpoint()
     _, xs_raw = jax.lax.scan(step, xt_scan, (Lambda_elements, Bu_elements_scan))
+    return xs_raw
+
+
+def recurrent_loop_for_jax(
+    Bu_elements_real: Array,
+    Bu_elements_imag: Array,
+    Lambda_bar_real: Array,
+    Lambda_bar_imag: Array,
+    xt_real: Array,
+    xt_imag: Array,
+    Bu_elements_real_exp: int,
+    Bu_elements_imag_exp: int,
+    Lambda_bar_real_exp: int,
+    Lambda_bar_imag_exp: int,
+    xt_real_exp: int,
+    xt_imag_exp: int,
+):
+    ones_shape = (Bu_elements_real.shape[-2], Lambda_bar_real.shape[0])
+    Lambda_elements = jax.numpy.stack(
+        [
+            Lambda_bar_real * np.ones(ones_shape, dtype=np.int32),
+            Lambda_bar_imag * np.ones(ones_shape, dtype=np.int32),
+        ],
+        axis=-1,
+    )
+    Bu_elements_scan = jax.numpy.stack([Bu_elements_real, Bu_elements_imag], axis=-1)
+    step = make_ssm_step_fn(
+        Atre_exp=Lambda_bar_real_exp,
+        Atim_exp=Lambda_bar_imag_exp,
+        Butre_exp=Bu_elements_real_exp,
+        Butim_exp=Bu_elements_imag_exp,
+        xtre_exp=xt_real_exp,
+        xtim_exp=xt_imag_exp,
+    )
+    xt_scan = jax.numpy.stack([xt_real, xt_imag], axis=-1)
+    
+    # Manual for loop instead of jax.lax.scan
+    carry = xt_scan
+    outputs = []
+    
+    for t in range(Bu_elements_scan.shape[0]):  # iterate over sequence length
+        inputs = (Lambda_elements[t], Bu_elements_scan[t])
+        carry, output = step(carry, inputs)
+        outputs.append(output)
+    
+    xs_raw = jax.numpy.stack(outputs, axis=0)
+    return xs_raw
+
+
+def recurrent_loop_for_jax_simple(
+    Bu_elements_real: Array,
+    Bu_elements_imag: Array,
+    Lambda_bar_real: Array,
+    Lambda_bar_imag: Array,
+    xt_real: Array,
+    xt_imag: Array,
+    Bu_elements_real_exp: int,
+    Bu_elements_imag_exp: int,
+    Lambda_bar_real_exp: int,
+    Lambda_bar_imag_exp: int,
+    xt_real_exp: int,
+    xt_imag_exp: int,
+):
+    ones_shape = (Bu_elements_real.shape[-2], Lambda_bar_real.shape[0])
+    Lambda_elements = jax.numpy.stack(
+        [
+            Lambda_bar_real * np.ones(ones_shape, dtype=np.int32),
+            Lambda_bar_imag * np.ones(ones_shape, dtype=np.int32),
+        ],
+        axis=-1,
+    )
+    Bu_elements_scan = jax.numpy.stack([Bu_elements_real, Bu_elements_imag], axis=-1)
+    
+    # Initialize carry state
+    carry = jax.numpy.stack([xt_real, xt_imag], axis=-1)
+    outputs = []
+    
+    # Manual for loop with inlined step function logic
+    for t in range(Bu_elements_scan.shape[0]):  # iterate over sequence length
+        # Get current inputs
+        At = Lambda_elements[t]
+        But = Bu_elements_scan[t]
+        
+        # Unstack inputs
+        Butreal, Butimag = np.unstack(But, axis=-1)
+        Atreal, Atimag = np.unstack(At, axis=-1)
+        
+        # Unstack previous state
+        xprev = carry
+        xprev_re, xprev_im = np.unstack(xprev, axis=-1)
+        
+        # Complex multiplication: At * xprev with proper bit shifting
+        Axt_re = ((Atreal * xprev_re) >> Lambda_bar_real_exp) - ((Atimag * xprev_im) >> Lambda_bar_real_exp)
+        Axt_im = ((Atreal * xprev_im) >> Lambda_bar_imag_exp) + ((Atimag * xprev_re) >> Lambda_bar_imag_exp)
+        
+        # Adjust But components based on exponent differences
+        Butre = (
+            (Butreal >> (Bu_elements_real_exp - xt_real_exp))
+            if Bu_elements_real_exp > xt_real_exp
+            else (Butreal << (xt_real_exp - Bu_elements_real_exp))
+        )
+        Butim = (
+            (Butimag >> (Bu_elements_imag_exp - xt_imag_exp))
+            if Bu_elements_imag_exp > xt_imag_exp
+            else (Butimag << (xt_imag_exp - Bu_elements_imag_exp))
+        )
+        
+        # Compute new state: Axt + But
+        xt = jax.numpy.stack([Axt_re + Butre, Axt_im + Butim], axis=-1)
+        
+        # Update carry and collect output
+        carry = xt
+        outputs.append(xt)
+    
+    xs_raw = jax.numpy.stack(outputs, axis=0)
+    return xs_raw
+
+
+def recurrent_loop_numpy(
+    Bu_elements_real: Array,
+    Bu_elements_imag: Array,
+    Lambda_bar_real: Array,
+    Lambda_bar_imag: Array,
+    xt_real: Array,
+    xt_imag: Array,
+    Bu_elements_real_exp: int,
+    Bu_elements_imag_exp: int,
+    Lambda_bar_real_exp: int,
+    Lambda_bar_imag_exp: int,
+    xt_real_exp: int,
+    xt_imag_exp: int,
+):
+    ones_shape = (Bu_elements_real.shape[-2], Lambda_bar_real.shape[0])
+    Lambda_elements = np.stack(
+        [
+            Lambda_bar_real * np.ones(ones_shape, dtype=np.int32),
+            Lambda_bar_imag * np.ones(ones_shape, dtype=np.int32),
+        ],
+        axis=-1,
+    )
+    Bu_elements_scan = np.stack([Bu_elements_real, Bu_elements_imag], axis=-1)
+    
+    # Initialize carry state
+    carry = np.stack([xt_real, xt_imag], axis=-1)
+    outputs = []
+    
+    # Manual for loop with inlined step function logic
+    for t in range(Bu_elements_scan.shape[0]):  # iterate over sequence length
+        # Get current inputs
+        At = Lambda_elements[t]
+        But = Bu_elements_scan[t]
+        
+        # Unstack inputs (replace np.unstack with numpy indexing)
+        Butreal, Butimag = But[..., 0], But[..., 1]
+        Atreal, Atimag = At[..., 0], At[..., 1]
+        
+        # Unstack previous state
+        xprev = carry
+        xprev_re, xprev_im = xprev[..., 0], xprev[..., 1]
+        
+        # Complex multiplication: At * xprev with proper bit shifting
+        Axt_re = ((Atreal * xprev_re) >> Lambda_bar_real_exp) - ((Atimag * xprev_im) >> Lambda_bar_real_exp)
+        Axt_im = ((Atreal * xprev_im) >> Lambda_bar_imag_exp) + ((Atimag * xprev_re) >> Lambda_bar_imag_exp)
+        
+        # Adjust But components based on exponent differences
+        Butre = (
+            (Butreal >> (Bu_elements_real_exp - xt_real_exp))
+            if Bu_elements_real_exp > xt_real_exp
+            else (Butreal << (xt_real_exp - Bu_elements_real_exp))
+        )
+        Butim = (
+            (Butimag >> (Bu_elements_imag_exp - xt_imag_exp))
+            if Bu_elements_imag_exp > xt_imag_exp
+            else (Butimag << (xt_imag_exp - Bu_elements_imag_exp))
+        )
+        
+        # Compute new state: Axt + But
+        xt = np.stack([Axt_re + Butre, Axt_im + Butim], axis=-1)
+        
+        # Update carry and collect output
+        carry = xt
+        outputs.append(xt)
+    
+    xs_raw = np.stack(outputs, axis=0)
     return xs_raw
 
 
@@ -248,9 +431,6 @@ class FxpS5Config:
             "zoh",
             "foh",
         ], f"Invalid discretization: {self.discretization}"
-        assert isinstance(
-            self.q_config, QuantizationConfig
-        ), f"Invalid q_config: {self.q_config}"
         assert (
             self.glu_variant in GLU_VARIANTS
         ), f"Invalid GLU variant: {self.glu_variant}"
@@ -688,14 +868,21 @@ class FxpSSM(FxpModule):
         logger.debug(f"Starting recurrent loop for {self.scope}")
         if self.use_lax_scan:
             assert Bu_elements.ndim < 3, "batching not supported"
-            recurrent_loop_fn = recurrent_loop
+            # recurrent_loop_fn = recurrent_loop
+            # recurrent_loop_fn = recurrent_loop_for_jax
+            # recurrent_loop_fn = recurrent_loop_for_jax_simple
+            recurrent_loop_fn = recurrent_loop_numpy
             xs_raw = recurrent_loop_fn(
                 Bu_elements.real.data,
                 Bu_elements.imag.data,
-                jax.numpy.asarray(self.Lambda_bar.real.data),
-                jax.numpy.asarray(self.Lambda_bar.imag.data),
-                jax.numpy.asarray(xt.real.data),
-                jax.numpy.asarray(xt.imag.data),
+                self.Lambda_bar.real.data,
+                self.Lambda_bar.imag.data,
+                xt.real.data,
+                xt.imag.data,
+                # jax.numpy.asarray(self.Lambda_bar.real.data),
+                # jax.numpy.asarray(self.Lambda_bar.imag.data),
+                # jax.numpy.asarray(xt.real.data),
+                # jax.numpy.asarray(xt.imag.data),
                 Bu_elements.real.exp,
                 Bu_elements.imag.exp,
                 self.Lambda_bar.real.exp,
@@ -706,7 +893,6 @@ class FxpSSM(FxpModule):
             xs = xt
             xs.real.data = xs_raw[..., 0]
             xs.imag.data = xs_raw[..., 1]
-            # breakpoint()
         else:
             xs_list = []
             xs_fp_list = []

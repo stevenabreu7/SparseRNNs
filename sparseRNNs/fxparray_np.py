@@ -5,8 +5,6 @@ from functools import partial
 from typing import Callable, Optional, Tuple, Any
 
 import numpy as np
-# import jax.numpy as np
-# from jaxtyping import Array
 
 Array = Any
 

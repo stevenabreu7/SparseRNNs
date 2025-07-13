@@ -1,12 +1,9 @@
-import jax
-import os
 import pickle
 import sys
 import json
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-from pprint import pprint
 from functools import partial
 
 from sparseRNNs.utils.logging_np import logger
@@ -17,7 +14,6 @@ from sparseRNNs.fxparray_np import (
 from sparseRNNs.fxpmodel_np import (
     FxpRegressionModel, FxpSSM, FxpS5Config, fxp_relu, FxpSigmoid
 )
-from sparseRNNs.fxputils import create_fxp_qconfig, add_target_bits_exp
 from sparseRNNs.model.ssm_np import discretize_zoh
 from sparseRNNs.model.ssm import QuantizationConfig
 
@@ -468,8 +464,6 @@ def simple_fxp_first_encoder_layer(encoder_output_fxp, modeldict, fxp_qconfig, s
         scope=f"{scope}.ssm"
     )
     
-    # CRITICAL FIX: Apply D (feedthrough) to the original input, not batch-normalized
-    # This matches what the full model does with fused batch norm
     print(f"\n--- Applying D feedthrough to original input ---")
     
     # Get D matrix
@@ -482,10 +476,10 @@ def simple_fxp_first_encoder_layer(encoder_output_fxp, modeldict, fxp_qconfig, s
         round_mode=RoundingMode.ROUND,
     )
     
-    # Apply D to original input (before batch norm)
+    # Apply D to input
     Du_correct = fxp_mul(
         D_fxp,
-        encoder_output_fxp,  # Use original input, not batch-normalized
+        encoder_output_fxp,
         result_exp=layer0_qconfig['ssm']["activations"]["y"]["exp"],
         result_bits=layer0_qconfig['ssm']["activations"]["y"]["bits"],
     )

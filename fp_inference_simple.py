@@ -457,7 +457,7 @@ def plot_comparisons(simple_results, full_results):
     axes[1, 2].grid(True)
     
     plt.tight_layout()
-    plt.savefig('layer0_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig('fp_layer0_comparison.png', dpi=300, bbox_inches='tight')
     plt.show()
     
     # Print statistics

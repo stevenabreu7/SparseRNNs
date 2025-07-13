@@ -672,7 +672,7 @@ def compare_fxp_results(simple_results, full_results):
         plt.grid(True)
         
         plt.tight_layout()
-        plt.savefig('fxp_comparison.png', dpi=300, bbox_inches='tight')
+        plt.savefig('fxp_layer0_comparison.png', dpi=300, bbox_inches='tight')
         plt.show()
         
         return final_error

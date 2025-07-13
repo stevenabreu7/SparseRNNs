@@ -22,7 +22,7 @@ Dtype = DTypeLike
 
 sys.path.append("$HOME/ncl-dl-stack")
 
-GLU_VARIANTS = ["full", "half1", "half2", "none"]
+GLU_VARIANTS = ["half1"]
 
 def relu(x: Array) -> Array:
     return np.maximum(x, 0)
@@ -716,9 +716,8 @@ class FxpSSM(FxpModule):
         logger.debug(f"Completed recurrent loop for {self.scope}")
 
         # relu
-        if self.relufication:
-            xs = fxp_relu(xs)
-            self.sow("intermediates", "xs_relu", xs)
+        xs = fxp_relu(xs)
+        self.sow("intermediates", "xs_relu", xs)
 
         # output
         logger.debug(f"C projection in {self.scope}")
@@ -922,19 +921,13 @@ class FxpSequenceLayer(FxpModule):
         assert not self.training, "Only training=False is supported for now."
         assert self.relufication, "Only relufication=True is supported for now."
         assert self.prenorm, "Only prenorm=True is supported for now."
-        if self.fuse_batchnorm_linear:
-            assert (
-                self.batchnorm
-            ), "fuse_batchnorm_linear can only be used with batchnorm"
-            assert self.prenorm, "fuse_batchnorm_linear can only be used with prenorm"
-
-        if not self.fuse_batchnorm_linear:
-            self.norm = FxpBatchNorm(
-                modeldict=self.modeldict["norm"],
-                fxp_qconfig=self.fxp_qconfig["norm"],
-                scope=f"{self.scope}.norm",
-                store_intermediates=self.store_intermediates,
-            )
+        
+        self.norm = FxpBatchNorm(
+            modeldict=self.modeldict["norm"],
+            fxp_qconfig=self.fxp_qconfig["norm"],
+            scope=f"{self.scope}.norm",
+            store_intermediates=self.store_intermediates,
+        )
 
         self.mixer = self.mixer_cls(
             modeldict=(
@@ -966,29 +959,13 @@ class FxpSequenceLayer(FxpModule):
         )
         dense_cls = FxpDense
 
-        assert (
-            self.glu_variant in GLU_VARIANTS
-        ), f"GLU variant must be one of {GLU_VARIANTS}"
-        if self.glu_variant == "full":
-            self.out1 = dense_cls(
-                modeldict=self.modeldict["out1"],
-                fxp_qconfig=self.fxp_qconfig["out1"],
-                scope=f"{self.scope}.out1",
-                store_intermediates=self.store_intermediates,
-            )
-            self.out2 = dense_cls(
-                modeldict=self.modeldict["out2"],
-                fxp_qconfig=self.fxp_qconfig["out2"],
-                scope=f"{self.scope}.out2",
-                store_intermediates=self.store_intermediates,
-            )
-        elif self.glu_variant in ["half1", "half2"]:
-            self.out2 = dense_cls(
-                modeldict=self.modeldict["out2"],
-                fxp_qconfig=self.fxp_qconfig["out2"],
-                scope=f"{self.scope}.out2",
-                store_intermediates=self.store_intermediates,
-            )
+        assert self.glu_variant in GLU_VARIANTS, f"GLU variant must be one of {GLU_VARIANTS}"
+        self.out2 = dense_cls(
+            modeldict=self.modeldict["out2"],
+            fxp_qconfig=self.fxp_qconfig["out2"],
+            scope=f"{self.scope}.out2",
+            store_intermediates=self.store_intermediates,
+        )
 
         self.glu_act_fn = fxp_relu
 
@@ -1036,37 +1013,19 @@ class FxpSequenceLayer(FxpModule):
         skip = x
         self.sow("intermediates", "ssm_input", x)
 
-        if self.fuse_batchnorm_linear and self.batchnorm and self.prenorm:
-            self.sow("intermediates", "pre_s5", x)
-            x, x_pre_C = self.mixer(x)
-        else:
-            if self.prenorm:
-                x = self.norm(x)
-            self.sow("intermediates", "pre_s5", x)
-            x, x_pre_C = self.mixer(x)
+        x = self.norm(x)
+        self.sow("intermediates", "pre_s5", x)
+        x, x_pre_C = self.mixer(x)
 
         self.sow("intermediates", "pre_C", x_pre_C)
 
         x1 = self.drop(self.glu_act_fn(x))
         self.sow("intermediates", "pre_GLU", x)
 
-        if self.glu_variant == "full":
-            rside = self.sigmoid(self.out2(x1))
-            self.sow("intermediates", "out2_sigmoid", rside)
-            x = self.mult_gate(self.out1(x1), rside)
-            x = self.drop(x)
-        elif self.glu_variant == "half1":
-            rside = self.sigmoid(self.out2(x1))
-            self.sow("intermediates", "out2_sigmoid", rside)
-            x = self.mult_gate(x1, rside)
-            x = self.drop(x)
-        elif self.glu_variant == "half2":
-            rside = self.sigmoid(self.out2(x1))
-            self.sow("intermediates", "out2_sigmoid", rside)
-            x = self.mult_gate(x, rside)
-            x = self.drop(x)
-        elif self.glu_variant == "none":
-            x = x1
+        rside = self.sigmoid(self.out2(x1))
+        self.sow("intermediates", "out2_sigmoid", rside)
+        x = self.mult_gate(x1, rside)
+        x = self.drop(x)
         self.sow("intermediates", "post_GLU", x)
 
         x = fxp_add(
@@ -1077,11 +1036,7 @@ class FxpSequenceLayer(FxpModule):
         )
         self.sow("intermediates", "residadd", x)
 
-        if not self.prenorm:
-            x = self.norm(x)
-
-        if self.relufication:
-            x = fxp_relu(x)
+        x = fxp_relu(x)
         self.sow("intermediates", "output", x)
         return x
 
@@ -1141,8 +1096,7 @@ class FxpStackedEncoderModel(FxpModule):
         self.sow("intermediates", "pre_encoder", x)
         x = self.encoder(x)
         self.sow("intermediates", "encoder_output", x)
-        if self.relufication:
-            x = fxp_relu(x)
+        x = fxp_relu(x)
         self.sow("intermediates", "encoder_output_relu", x)
         for idx, layer in enumerate(self.seq_layers):
             x = layer(x)

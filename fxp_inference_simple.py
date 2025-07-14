@@ -767,6 +767,41 @@ def main():
     
     # Get encoder output for simple implementation
     encoder_output_relu = full_results['encoder_intermediates']['encoder_output_relu']
+
+    #######
+    # new: calculate encoder output from scratch
+    partial_fxp_from_fp = partial(
+        fxp_from_fp, signed=True, round_mode=RoundingMode.ROUND
+    )
+    w = partial_fxp_from_fp(
+        modeldict['encoder']['encoder']['kernel'],
+        bits=fxp_qconfig['encoder']['w_bits'],
+        exp=fxp_qconfig['encoder']['w_exp'],
+        signed=True,
+    )
+    b = partial_fxp_from_fp(
+        modeldict['encoder']['encoder']['bias'],
+        bits=fxp_qconfig['encoder']['b_bits'],
+        exp=fxp_qconfig['encoder']['b_exp'],
+    )
+    y1 = fxp_matmul(
+        inputs,
+        w, 
+        result_exp=fxp_qconfig['encoder']['out_exp'],
+        result_bits=fxp_qconfig['encoder']['out_bits'],
+    )
+    y2 = fxp_add(
+        y1,
+        b,
+        result_exp=fxp_qconfig['encoder']['out_exp'],
+        result_bits=fxp_qconfig['encoder']['out_bits'],
+    )
+    y = fxp_relu(y2)
+
+    print(f"first encoder linear layer")
+    avg_err = np.abs(y.data - encoder_output_relu.data).mean()
+    print(f" avg. error between calculated and stored: {avg_err}")
+    #######
     
     # Run simple FXP implementation
     simple_results = simple_fxp_first_encoder_layer(

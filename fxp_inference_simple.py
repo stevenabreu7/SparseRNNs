@@ -402,18 +402,6 @@ def simple_fxp_glu(x_fxp, out2_modeldict, fxp_qconfig, scope="glu"):
     print(f"Gate values: {gate.to_float()[:5, 0]}")
     
     # Multiply: x * gate
-    x_relu = x_relu.change_cfg(
-        new_bits=fxp_qconfig["multgate"]["l_bits"],
-        new_exp=fxp_qconfig["multgate"]["l_exp"],
-        new_signed=True,
-    )
-    
-    gate = gate.change_cfg(
-        new_bits=fxp_qconfig["multgate"]["r_bits"],
-        new_exp=fxp_qconfig["multgate"]["r_exp"],
-        new_signed=True,
-    )
-    
     x_gated = fxp_mul(
         x_relu,
         gate,
@@ -455,64 +443,17 @@ def simple_fxp_first_encoder_layer(encoder_output_fxp, modeldict, fxp_qconfig, s
     )
     
     # Step 2: SSM Forward Pass
-    # NOTE: For feedthrough (D term), we need to use the input BEFORE batch norm
     # This is a key finding from our debugging
-    x_ssm, xs_states, Bu_elements = simple_fxp_ssm_forward(
+    ys, xs, Bu_elements = simple_fxp_ssm_forward(
         x_bn,  # Use batch-normalized input for SSM computation
         layer0_data['mixer'],
         layer0_qconfig['ssm'],
         scope=f"{scope}.ssm"
     )
-    
-    print(f"\n--- Applying D feedthrough to original input ---")
-    
-    # Get D matrix
-    D_data = layer0_data['mixer']['D']
-    D_fxp = fxp_from_fp(
-        D_data,
-        bits=layer0_qconfig['ssm']["weights"]["D"]["bits"],
-        exp=layer0_qconfig['ssm']["weights"]["D"]["exp"],
-        signed=True,
-        round_mode=RoundingMode.ROUND,
-    )
-    
-    # Apply D to input
-    Du_correct = fxp_mul(
-        D_fxp,
-        encoder_output_fxp,
-        result_exp=layer0_qconfig['ssm']["activations"]["y"]["exp"],
-        result_bits=layer0_qconfig['ssm']["activations"]["y"]["bits"],
-    )
-    
-    print(f"D applied to original input: {Du_correct.to_float()[:5, 0]}")
-    
-    # Subtract the incorrect D term and add the correct one
-    # Get the C projection part only
-    C_proj_only = fxp_sub(
-        x_ssm,
-        fxp_mul(
-            D_fxp,
-            x_bn,  # This was the incorrect input to D
-            result_exp=layer0_qconfig['ssm']["activations"]["y"]["exp"],
-            result_bits=layer0_qconfig['ssm']["activations"]["y"]["bits"],
-        ),
-        result_exp=layer0_qconfig['ssm']["activations"]["y"]["exp"],
-        result_bits=layer0_qconfig['ssm']["activations"]["y"]["bits"],
-    )
-    
-    # Add the correct D term
-    x_ssm_corrected = fxp_add(
-        C_proj_only,
-        Du_correct,
-        result_exp=layer0_qconfig['ssm']["activations"]["y"]["exp"],
-        result_bits=layer0_qconfig['ssm']["activations"]["y"]["bits"],
-    )
-    
-    print(f"Corrected SSM output: {x_ssm_corrected.to_float()[:5, 0]}")
-    
+
     # Step 3: GLU
     x_glu = simple_fxp_glu(
-        x_ssm_corrected,
+        ys,
         layer0_data['out2'],
         layer0_qconfig,
         scope=f"{scope}.glu"
@@ -540,11 +481,11 @@ def simple_fxp_first_encoder_layer(encoder_output_fxp, modeldict, fxp_qconfig, s
     return {
         'input': encoder_output_fxp,
         'after_batch_norm': x_bn,
-        'ssm_output': x_ssm_corrected,
+        'ssm_output': ys,
         'glu_output': x_glu,
         'residual_output': x_residual,
         'final_output': x_final,
-        'ssm_states': xs_states,
+        'ssm_states': xs,
         'Bu_elements': Bu_elements,
     }
 

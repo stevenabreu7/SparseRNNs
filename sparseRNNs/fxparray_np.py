@@ -336,12 +336,15 @@ def fxp_maxval(arr: FxpArray) -> int:
 
 
 def print_call_stack():
-    x = ["--".join(frame.code_context).strip() for frame in inspect.stack()[1:][::-1]]
-    x = [e.split(" = ")[-1] for e in x]
-    last_idxs = [idx for idx in range(len(x)) if "print_call_stack" in x[idx]]
-    x = x[: last_idxs[0]] if len(x) > 0 else x
-    x = [e for e in x if "return self.forward(*args, **kwargs)" not in e]
-    print(" -> ".join(x))
+    try:
+        x = ["--".join(frame.code_context).strip() for frame in inspect.stack()[1:][::-1]]
+        x = [e.split(" = ")[-1] for e in x]
+        last_idxs = [idx for idx in range(len(x)) if "print_call_stack" in x[idx]]
+        x = x[: last_idxs[0]] if len(x) > 0 else x
+        x = [e for e in x if "return self.forward(*args, **kwargs)" not in e]
+        print(" -> ".join(x))
+    except:
+        print()
 
 
 def fxp_clip(arr: FxpArray, do_warn: bool = False, warn_prefix: str = ""):

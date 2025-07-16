@@ -145,9 +145,12 @@ if __name__ == "__main__":
     zoom_mask = (x >= -5) & (x <= 5)
     plt.plot(x[zoom_mask], ytrue[zoom_mask], 'b-', label='True Sigmoid', linewidth=2)
     plt.plot(x[zoom_mask], yapprox[zoom_mask], 'r-', label='FXP Sigmoid', linewidth=2)
+    for lut_x in lut_x_both_sides:
+        if -5 <= lut_x <= 5:
+            plt.axvline(x=lut_x, color='gray', linestyle=':', alpha=0.7, linewidth=1)
     plt.xlabel('x')
     plt.ylabel('sigmoid(x)')
-    plt.title('Sigmoid Comparison (Zoomed)')
+    plt.title('Sigmoid Comparison (Zoomed, gray lines: LUT points)')
     plt.legend()
     plt.grid(True, alpha=0.3)
     
